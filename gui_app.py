@@ -437,16 +437,6 @@
 #             st.markdown(final_text)
 #             st.session_state.chat_history.append({"role": "assistant", "content": final_text})
 
-"""
-Expert AI Knowledge & Weather Assistant
-========================================
-- LOCAL  : Uses Ollama (llama3.2) + nomic-embed-text  — fully offline
-- CLOUD  : Uses Groq API (llama3-8b-8192, free tier)  — for Streamlit Cloud
-           Set GROQ_API_KEY in Streamlit Cloud → Settings → Secrets
-
-Switch is automatic: if Ollama is reachable → use it; else → use Groq.
-"""
-
 import re
 import os
 import sys
@@ -470,7 +460,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 2. ENVIRONMENT DETECTION  (local Ollama vs Streamlit Cloud)
+# 2. ENVIRONMENT DETECTION
 # ─────────────────────────────────────────────────────────────────────────────
 def _ollama_is_running() -> bool:
     try:
@@ -482,7 +472,7 @@ def _ollama_is_running() -> bool:
 USE_OLLAMA = _ollama_is_running()
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 3. LLM + EMBEDDINGS INIT
+# 3. LLM + EMBEDDINGS
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_resource
 def init_llm():
@@ -490,13 +480,13 @@ def init_llm():
         from langchain_ollama import ChatOllama
         return ChatOllama(model="llama3.2", temperature=0.3)
     else:
-        # Groq free tier — get key at console.groq.com (takes 30 seconds)
         from langchain_groq import ChatGroq
         groq_key = st.secrets.get("GROQ_API_KEY", os.environ.get("GROQ_API_KEY", ""))
         if not groq_key:
             st.error("⚠️ No GROQ_API_KEY found. Add it in Streamlit Cloud → Settings → Secrets.")
             st.stop()
-        return ChatGroq(model="llama3-8b-8192", api_key=groq_key, temperature=0.3)
+        # llama-3.1-8b-instant is the current free fast model on Groq
+        return ChatGroq(model="llama-3.1-8b-instant", api_key=groq_key, temperature=0.3)
 
 @st.cache_resource
 def init_embeddings():
@@ -504,7 +494,6 @@ def init_embeddings():
         from langchain_ollama import OllamaEmbeddings
         return OllamaEmbeddings(model="nomic-embed-text")
     else:
-        # HuggingFace free embeddings — no key needed
         from langchain_community.embeddings import HuggingFaceEmbeddings
         return HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
 
@@ -526,7 +515,43 @@ def build_lc_messages():
     return msgs
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 4. CHROMA PATH  (writable temp dir on cloud, project dir locally)
+# 4. CLOUD-NATIVE DOCUMENT TOOLS
+#    These call chat_llm directly — no Ollama dependency at all.
+#    Used on cloud instead of core/tools.py which is hardcoded to localhost.
+# ─────────────────────────────────────────────────────────────────────────────
+def cloud_summarize(text: str) -> str:
+    resp = chat_llm.invoke([HumanMessage(content=(
+        "Summarize the following document clearly in markdown with headings and bullet points.\n"
+        "Be thorough — cover all key topics, concepts, and details.\n\n"
+        f"{text}"
+    ))])
+    return resp.content
+
+def cloud_quiz(text: str) -> str:
+    resp = chat_llm.invoke([HumanMessage(content=(
+        "Create 5 multiple choice questions (A/B/C/D) based on this content.\n"
+        "For each question, clearly mark the correct answer at the end.\n\n"
+        f"{text}"
+    ))])
+    return resp.content
+
+def cloud_key_points(text: str) -> str:
+    resp = chat_llm.invoke([HumanMessage(content=(
+        "Extract the key points from the following content.\n"
+        "Format as a clean markdown bullet list with bold headings for each category.\n\n"
+        f"{text}"
+    ))])
+    return resp.content
+
+def cloud_answer(text: str, question: str) -> str:
+    resp = chat_llm.invoke([HumanMessage(content=(
+        f"Using the following document content, answer this question: {question}\n\n"
+        f"Document content:\n{text}"
+    ))])
+    return resp.content
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5. CHROMA PATH
 # ─────────────────────────────────────────────────────────────────────────────
 if USE_OLLAMA:
     PROJECT_ROOT = r"C:\Users\Ranvijay Singh\OneDrive\Dokumen\ollama"
@@ -537,7 +562,7 @@ else:
     CHROMA_PATH = os.path.join(tempfile.gettempdir(), "ai_assistant_chroma")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 5. VECTOR INDEX BUILDER  (timestamp collections — no WinError 32)
+# 6. VECTOR INDEX BUILDER
 # ─────────────────────────────────────────────────────────────────────────────
 def build_vector_index(uploaded_file_objects: list) -> tuple:
     try:
@@ -576,14 +601,11 @@ def build_vector_index(uploaded_file_objects: list) -> tuple:
         return (f"✅ {len(uploaded_file_objects)} file(s) indexed — {len(chunks)} chunks stored.",
                 collection_name)
 
-    except ImportError as e:
-        return (f"⚠️ Missing package: {e}\n"
-                "Run: pip install langchain-text-splitters langchain-community langchain-chroma", None)
     except Exception as e:
         return f"⚠️ Indexing failed: {e}", None
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 6. RETRIEVER  — queries ONLY the active collection
+# 7. RETRIEVER
 # ─────────────────────────────────────────────────────────────────────────────
 def query_active_collection(query: str, collection_name: str) -> str:
     try:
@@ -593,13 +615,13 @@ def query_active_collection(query: str, collection_name: str) -> str:
             embedding_function=embeddings,
             collection_name=collection_name,
         )
-        results = vectorstore.similarity_search(query, k=6)
+        results = vectorstore.similarity_search(query, k=8)
         return "\n\n".join(doc.page_content for doc in results) if results else ""
     except Exception as e:
         return f"failed: {e}"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 7. WEATHER  (Open-Meteo free API — no key needed)
+# 8. WEATHER
 # ─────────────────────────────────────────────────────────────────────────────
 WMO_CODES = {
     0:"Clear sky ☀️", 1:"Mainly clear 🌤️", 2:"Partly cloudy ⛅", 3:"Overcast ☁️",
@@ -660,11 +682,11 @@ def get_weather(raw_city):
             )
     except Exception:
         pass
-    return (f"⚠️ Could not fetch weather for **'{raw_city}'** (tried correcting to '{corrected}').\n"
+    return (f"⚠️ Could not fetch weather for **'{raw_city}'**.\n"
             "Please check your internet connection.")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 8. SESSION STATE
+# 9. SESSION STATE
 # ─────────────────────────────────────────────────────────────────────────────
 for key, default in [("chat_history", []), ("indexed_filenames", set()),
                      ("active_collection", None), ("index_status", "")]:
@@ -672,7 +694,7 @@ for key, default in [("chat_history", []), ("indexed_filenames", set()),
         st.session_state[key] = default
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 9. SIDEBAR
+# 10. SIDEBAR
 # ─────────────────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.header("📁 Document Management")
@@ -715,13 +737,13 @@ with st.sidebar:
         st.rerun()
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 10. PAGE HEADER
+# 11. PAGE HEADER
 # ─────────────────────────────────────────────────────────────────────────────
 st.title("🧠 Expert AI Knowledge & Weather Assistant")
 st.write("Upload PDFs or text files — ask anything about them, check live weather, or just chat!")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 11. INTENT CLASSIFIER
+# 12. INTENT CLASSIFIER
 # ─────────────────────────────────────────────────────────────────────────────
 _MATH_RE = re.compile(r"^[\d\s\+\-\*/\^\(\)\.%,=]+$")
 GREETING_EXACT    = {"hi","hello","hey","sup","howdy","hiya","yo","good morning",
@@ -738,7 +760,8 @@ DOC_TRIGGER       = {"document","pdf","file","uploaded","explain this","what doe
                      "what is it about","what is this about","tell me about","describe this",
                      "this doc","the file","the document","the pdf","slides","lecture","notes",
                      "polymer","chemistry","material","chapter","subject","course","unit",
-                     "what are","explain the","about the","from the","content"}
+                     "what are","explain the","about the","from the","content","fluid",
+                     "dynamics","physics","theory","concept","define","definition"}
 NEW_DOC_PHRASES   = {"new document","new file","new pdf","another document","uploaded new",
                      "just uploaded","i uploaded","i have uploaded","added a new","another file"}
 
@@ -762,10 +785,10 @@ def classify_intent(text):
     if _has(t, NEW_DOC_PHRASES):                                return "new_doc",    None
     if _has(t, WEATHER_TRIGGER):                                return "weather",    extract_city(t)
     if _has(t, SUMMARIZE_TRIGGER):                              return "summarize",  None
-    has_doc = _has(t, DOC_TRIGGER)
-    if _has(t, QUIZ_TRIGGER)      and has_doc:                  return "quiz",       None
-    if _has(t, KEYPOINTS_TRIGGER) and has_doc:                  return "key_points", None
-    if has_doc:                                                 return "retrieve",   None
+    has_doc = _has(t, DOC_TRIGGER) or bool(st.session_state.active_collection)
+    if _has(t, QUIZ_TRIGGER):                                   return "quiz",       None
+    if _has(t, KEYPOINTS_TRIGGER):                              return "key_points", None
+    if has_doc and _has(t, DOC_TRIGGER):                        return "retrieve",   None
     return "chat", None
 
 def bullets_to_markdown(text):
@@ -773,27 +796,9 @@ def bullets_to_markdown(text):
     return "\n".join(f"- {p.strip()}" for p in text.split("•") if p.strip())
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 12. DOCUMENT TOOL RUNNER
+# 13. DOCUMENT TOOL RUNNER — 100% cloud-native, no Ollama calls
 # ─────────────────────────────────────────────────────────────────────────────
 def run_doc_tool(intent, user_input):
-    # Import summarize/quiz/keypoints tools (local or cloud path)
-    try:
-        from core.tools import summarize_text, generate_quiz, extract_key_points
-    except ImportError:
-        # On cloud, define inline LLM-based fallbacks
-        def summarize_text_fn(text):
-            r = chat_llm.invoke([HumanMessage(content=f"Summarize this document clearly in markdown bullet points:\n\n{text}")])
-            return r.content
-        def generate_quiz_fn(text):
-            r = chat_llm.invoke([HumanMessage(content=f"Create 5 multiple choice questions from this content:\n\n{text}")])
-            return r.content
-        def extract_key_points_fn(text):
-            r = chat_llm.invoke([HumanMessage(content=f"Extract the key points from this content as a markdown bullet list:\n\n{text}")])
-            return r.content
-        summarize_text     = type("T", (), {"invoke": lambda s, x: summarize_text_fn(x["text"])})()
-        generate_quiz      = type("T", (), {"invoke": lambda s, x: generate_quiz_fn(x["text"])})()
-        extract_key_points = type("T", (), {"invoke": lambda s, x: extract_key_points_fn(x["text"])})()
-
     collection = st.session_state.active_collection
     if not collection:
         return ("⚠️ **No documents indexed yet.**\n\n"
@@ -808,25 +813,29 @@ def run_doc_tool(intent, user_input):
 
     if intent == "summarize":
         st.caption("✍️ *Summarizing…*")
-        return f"### 📋 Document Summary\n\n{bullets_to_markdown(summarize_text.invoke({'text': context}))}"
+        return f"### 📋 Document Summary\n\n{bullets_to_markdown(cloud_summarize(context))}"
+
     elif intent == "quiz":
         st.caption("🧪 *Generating quiz…*")
-        return f"### 🧪 Quiz\n\n{generate_quiz.invoke({'text': context})}"
+        return f"### 🧪 Quiz\n\n{cloud_quiz(context)}"
+
     elif intent == "key_points":
         st.caption("🔑 *Extracting key points…*")
-        return f"### 🔑 Key Points\n\n{bullets_to_markdown(extract_key_points.invoke({'text': context}))}"
+        return f"### 🔑 Key Points\n\n{bullets_to_markdown(cloud_key_points(context))}"
+
     else:
-        return f"### 📄 From Your Document\n\n{bullets_to_markdown(context)}"
+        st.caption("🔍 *Searching document…*")
+        return f"### 📄 From Your Document\n\n{cloud_answer(context, user_input)}"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 13. RENDER HISTORY
+# 14. RENDER HISTORY
 # ─────────────────────────────────────────────────────────────────────────────
 for msg in st.session_state.chat_history:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 14. CORE LOOP
+# 15. CORE LOOP
 # ─────────────────────────────────────────────────────────────────────────────
 if user_input := st.chat_input("Ask anything — documents, weather, maths, or just chat…"):
     with st.chat_message("user"):
