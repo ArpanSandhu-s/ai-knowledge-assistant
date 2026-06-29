@@ -1,4 +1,4 @@
-# 🧠 Nexus AI Workspace
+#  Nexus AI Workspace
 ### Multi-Agent Group Chat Orchestration Platform
 
 [![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://ai-knowledge-assistant-gapsv65wvsvxg6absfzemq.streamlit.app/)
@@ -59,9 +59,9 @@ Unlike a **Router** (hardcoded `if/else` keyword rules) or a **Sequential Chain*
 
 | Agent | Trigger | Knowledge Source |
 |---|---|---|
-| 🗂️ **Data Analyst Agent** | Document, PDF, summarize, quiz, key points | ChromaDB RAG (nomic-embed-text embeddings) |
-| 🌤️ **Weather Agent** | Weather, temperature, forecast, climate | Open-Meteo API + wttr.in fallback |
-| 🤖 **Generalist Agent** | Greetings, math, general knowledge | LLM base knowledge + conversation memory |
+|  **Data Analyst Agent** | Document, PDF, summarize, quiz, key points | ChromaDB RAG (nomic-embed-text embeddings) |
+|  **Weather Agent** | Weather, temperature, forecast, climate | Open-Meteo API + wttr.in fallback |
+|  **Generalist Agent** | Greetings, math, general knowledge | LLM base knowledge + conversation memory |
 
 ---
 
