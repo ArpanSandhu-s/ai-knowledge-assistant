@@ -1,6 +1,10 @@
 # 🧠 Nexus AI Workspace
 ### Multi-Agent Group Chat Orchestration Platform
 
+[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://ai-knowledge-assistant-gapsv65wvsvxg6absfzemq.streamlit.app/)
+
+🔗 **Live Demo:** https://ai-knowledge-assistant-gapsv65wvsvxg6absfzemq.streamlit.app/
+
 A local AI workspace implementing the **Azure AI Agent Design Pattern: Group Chat Orchestration** — built with LangChain, Ollama (llama3.2), ChromaDB, and Streamlit.
 
 ---
