@@ -1,78 +1,155 @@
-# Internship Knowledge Bot
+# 🧠 Nexus AI Workspace
+### Multi-Agent Group Chat Orchestration Platform
 
-A local, agentic question-answering system over personal documents (resume, business proposal), built with LangChain, Ollama, and a Chroma vector store. Runs entirely on-device — no cloud API calls, no data leaves the machine.
+[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://ai-knowledge-assistant-gapsv65wvsvxg6absfzemq.streamlit.app/)
+
+🔗 **Live Demo:** https://ai-knowledge-assistant-gapsv65wvsvxg6absfzemq.streamlit.app/
+
+---
 
 ## What it does
 
-The bot answers questions about uploaded PDFs (a resume and a business proposal) and can summarize content, extract key points, or generate quiz questions from retrieved sections. It also correctly handles questions unrelated to the documents (e.g. general knowledge, arithmetic) by answering directly instead of forcing irrelevant retrieval.
+An interactive AI workspace that implements the **Azure AI Agent Design Pattern: Group Chat Orchestration**. Users can upload PDFs, ask document questions, check live weather, solve math, or just chat — all routed dynamically by a Manager LLM to the right specialist agent.
 
-## Architecture: Handoff via tool selection
+---
 
-This project uses the **Handoff** pattern from Azure's AI agent design patterns, implemented through LangChain's tool-calling mechanism rather than a hardcoded router.
+## Architecture: Group Chat Orchestration
 
-The first version of this system used a plain Python `if/elif` block to inspect keywords in the user's query (`"summary" in query`) and manually call the matching function. That is not agentic — it is a rules engine that happens to call an LLM. It was replaced with a single `create_agent` instance holding four tools:
-
-- `retrieve_documents` — fetches relevant chunks from the vector store
-- `summarize_text` — summarizes a block of already-retrieved text
-- `generate_quiz` — generates quiz questions from a block of text
-- `extract_key_points` — extracts key points from a block of text
-
-The model itself decides which tool(s) to call, in what order, based on the user's question and each tool's docstring — not a Python conditional. This is the core distinction between routing and Handoff: in Handoff, an agent (here, the single agent reasoning over its tool list) decides where control goes next, rather than the developer deciding it ahead of time.
-
-**Why Handoff over the other four patterns:** the four request types (raw lookup, summarize, quiz, key points) are genuinely different specialist behaviors operating on the same retrieved content, not independent sub-tasks (ruling out Concurrent), not a fixed multi-stage pipeline (ruling out Sequential), and not a task requiring debate or iterative re-planning (ruling out Group Chat and Magentic). Handoff is the correct fit when request *types* differ but the underlying knowledge source is shared.
-
-## Model choice: llama3.2 → qwen2.5:7b
-
-The project started on `llama3.2` (3B parameters, the standard Ollama default). It produced two clear, reproducible failure modes during testing:
-
-1. **Hallucinated tool calls.** Asked a basic math question ("what's 17 times 4"), the model occasionally invented a tool that didn't exist in its tool list (`calculate`) and printed a fake JSON-formatted tool call as its final answer, instead of either calling a real tool or answering directly.
-2. **Inconsistent tool invocation.** On vague, meta-phrased queries ("summarize the key points of my resume"), the model sometimes failed to call `retrieve_documents` at all, and instead asked the user to paste in resume text — despite having direct tool access to fetch it itself.
-
-After swapping to `qwen2.5:7b` (7B parameters), both failure modes stopped appearing in testing. Qwen reliably distinguished between "this needs a tool" and "I can answer this directly," and consistently used its actual tool list instead of inventing entries.
-
-**Takeaway:** tool-calling reliability is not purely a prompt-engineering problem — it is also a function of base model capability. Smaller local models are noticeably less consistent at structured tool selection than mid-sized ones, even with identical prompts and tool definitions. This is a real constraint to plan around when choosing a local model for an agentic system, not just a performance/disk-space tradeoff.
-
-## Bug: vague queries broke retrieval
-
-Even after the model swap, one specific query reliably failed: *"summarize the key points of my resume."* Debug logging of the raw model output revealed two distinct causes, found in sequence:
-
-1. The model occasionally passed text copied from a tool's **docstring** as the `retrieve_documents` query argument, rather than the user's actual question. The `extract_key_points` docstring's wording ("key points or main ideas from a block of text") was similar enough to the user's phrasing that the model confused tool description with tool input.
-2. On vague, meta-style queries, the model sometimes hallucinated plausible-sounding but entirely fictional resume content (e.g. invented marketing/sales experience that does not appear anywhere in the actual document) rather than retrieving real content.
-
-**Fix:** the system prompt now explicitly instructs the agent to translate vague or meta-phrased questions ("summarize my resume") into concrete search terms ("resume", "skills", "experience") before calling `retrieve_documents`, and explicitly forbids fabricating document content — instructing the model to say retrieval was insufficient rather than guess. After this change, the same query correctly triggered `retrieve_documents` with a real search term, returned actual resume content, and produced an accurate summary with no fabrication.
-
-## Reliability layer
-
-Every agent invocation passes through `run_agent_safely`, which provides:
-
-- **Recursion limit** (`recursion_limit=8`) — caps how many reasoning/tool-call steps the agent can take before stopping, preventing runaway loops.
-- **Timeout** (`timeout_seconds=60`) — caps total wall-clock time per query.
-- **Malformed-output detection** — a regex check catches cases where the model prints unexecuted tool-call syntax as plain text (the hallucinated-tool failure mode above) and returns a clear, user-facing message instead of leaking raw, confusing output.
-- **Exception handling** — any unhandled error returns a readable message rather than a stack trace.
-
-### The speed/reliability tradeoff
-
-The timeout was originally set to 10–20 seconds based on llama3.2's response time. After switching to qwen2.5:7b, multi-tool queries began timing out — not because anything was broken, but because the larger model takes meaningfully longer per inference pass, and an agentic query can require 2–4 model passes (reason → retrieve → reason → summarize → compose). The timeout was raised to 60 seconds to accommodate this.
-
-This is a genuine, demonstrable tradeoff: **larger local models are more reliable at tool selection but slower per response.** On constrained hardware, this is a real design decision a team has to make — not a one-time bug fix.
-
-## Project structure
+This project implements the [Group Chat Orchestration pattern](https://learn.microsoft.com/en-us/azure/architecture/ai-ml/guide/ai-agent-design-patterns) from the Microsoft Azure Architecture Center.
 
 ```
-core/
-├── agents.py          # single create_agent instance with full tool list + system prompt
-├── tools.py            # @tool-decorated functions: retrieve_documents, summarize_text,
-│                        #   generate_quiz, extract_key_points
-├── orchestration.py     # thin wrapper calling run_agent_safely with timeout + recursion limit
-├── safe_runner.py       # resilience layer: timeout, recursion limit, malformed-output detection
-└── rag.py               # Chroma vector store + similarity search
-db/                       # persisted Chroma vector store
-docs/                     # source PDFs (resume, business proposal)
-main.py                   # CLI entry point
+User Query
+    │
+    ▼
+┌─────────────────────┐
+│   GroupChatManager  │  ◄── LLM reads shared transcript → picks next speaker or FINISH
+└──────────┬──────────┘
+           │
+  ┌────────┼────────┐
+  ▼        ▼        ▼
+Data    Weather  Generalist
+Analyst  Agent    Agent
+  │        │        │
+  └────────┼────────┘
+           ▼
+    Shared Transcript
+           │
+           ▼
+        Result
 ```
 
-## What I'd improve with more time
+Unlike a **Router** (hardcoded `if/else` keyword rules) or a **Sequential Chain** (fixed pipeline), Group Chat uses a **Manager LLM** that autonomously reads the full shared transcript after every turn and decides which specialist speaks next — non-deterministic, dynamic coordination.
 
-- Add LangSmith tracing as a permanent part of the pipeline (currently checked manually per-session) to catch silent wrong answers in production use, not just during debugging.
-- Evaluate whether a quantized or distilled model could match qwen2.5:7b's tool-calling reliability at lower latency.
-- Add automated test queries (including the specific failure cases documented above) so regressions are caught before a live demo, rather than discovered during one.
+**Evolution from v1:** The first version of this system used a plain Python `if/elif` block to inspect keywords in the user query (`"summary" in query`) and manually call matching functions. That is not agentic — it is a rules engine that happens to call an LLM. It was replaced with the Group Chat Orchestration pattern where the Manager LLM itself decides routing based on the full conversation context.
+
+---
+
+## The 4 Core Pillars
+
+| Pillar | Component | Role |
+|---|---|---|
+| 1 | `AGENT_REGISTRY` | Defines specialist capabilities — Manager reads this to make routing decisions |
+| 2 | `AGENT_SYSTEM_PROMPTS` | Each specialist has a strict, isolated role definition |
+| 3 | `GroupChatManager` | An LLM that reads the shared transcript and selects the next speaker |
+| 4 | `GroupChatOrchestrator` | Runs the loop: Manager → Specialist → Transcript → repeat until FINISH |
+
+---
+
+## Specialist Agent Roster
+
+| Agent | Trigger | Knowledge Source |
+|---|---|---|
+| 🗂️ **Data Analyst Agent** | Document, PDF, summarize, quiz, key points | ChromaDB RAG (nomic-embed-text embeddings) |
+| 🌤️ **Weather Agent** | Weather, temperature, forecast, climate | Open-Meteo API + wttr.in fallback |
+| 🤖 **Generalist Agent** | Greetings, math, general knowledge | LLM base knowledge + conversation memory |
+
+---
+
+## Tech Stack
+
+| Layer | Technology |
+|---|---|
+| Frontend | Streamlit |
+| Orchestration | LangChain (Python) |
+| Local LLM | Ollama — `llama3.2` (3B) |
+| Cloud LLM | Groq — `llama-3.1-8b-instant` |
+| Embeddings (local) | Ollama — `nomic-embed-text` (768d) |
+| Embeddings (cloud) | HuggingFace — `all-MiniLM-L6-v2` |
+| Vector Store | ChromaDB (timestamp-isolated collections) |
+| Weather API | Open-Meteo (primary) + wttr.in (fallback) |
+
+---
+
+## Key Design Decisions
+
+**Why Group Chat over Router?**
+A Router uses hardcoded keyword matching. The `GroupChatManager` calls `llm.invoke()` on the full shared transcript to make its routing decision — the logic itself is intelligent, not rule-based.
+
+**Why timestamp-isolated ChromaDB collections?**
+On Windows, ChromaDB holds file locks on `data_level0.bin`. Deleting collections on new uploads triggers `[WinError 32]`. Timestamp-based collection names (`docs_1234567890`) isolate each upload without touching locked files.
+
+**Why pre-fetch weather/RAG before the orchestration loop?**
+`llama3.2` has no internet access. Weather data is fetched via `requests` and RAG chunks pulled from ChromaDB before the loop starts — injected into the shared transcript as system context so specialist agents work with real data.
+
+**Termination Engine design:**
+Rather than relying solely on the Manager LLM to signal `FINISH` (unreliable with smaller models), the termination check first inspects the transcript directly — if any specialist has already responded, it returns `FINISH` without an extra LLM call. The LLM is only invoked for the initial routing decision.
+
+**Dual runtime (local + cloud):**
+The app detects whether Ollama is running on `localhost:11434`. If yes → uses `llama3.2` + `nomic-embed-text` locally. If no → switches to Groq (`llama-3.1-8b-instant`) + HuggingFace embeddings for cloud deployment. Zero code changes needed between environments.
+
+---
+
+## How to Run Locally
+
+### Prerequisites
+```bash
+ollama pull llama3.2
+ollama pull nomic-embed-text
+```
+
+### Setup
+```bash
+git clone https://github.com/ArpanSandhu-s/ai-knowledge-assistant
+cd ai-knowledge-assistant/main
+pip install -r requirements.txt
+```
+
+### Run
+```bash
+streamlit run gui_app.py
+```
+
+---
+
+## Project Structure
+
+```
+main/
+├── gui_app.py              # Streamlit UI + Group Chat integration
+├── group_chat_engine.py    # Azure Group Chat Orchestration implementation
+│   ├── AGENT_REGISTRY          # Pillar 1 — Specialist definitions
+│   ├── AGENT_SYSTEM_PROMPTS    # Pillar 2 — Isolated agent roles  
+│   ├── GroupChatManager        # Pillar 3 — LLM-based speaker selection
+│   └── GroupChatOrchestrator   # Pillar 4 — Dynamic loop + termination engine
+├── chroma_db/              # Local vector store (auto-created)
+├── chat_memory.json        # Persistent chat history (auto-created)
+└── .streamlit/
+    └── secrets.toml        # API keys (not committed)
+
+core/                       # v1 Handoff pattern implementation (reference)
+├── agents.py
+├── tools.py
+├── orchestration.py
+├── safe_runner.py
+└── rag.py
+```
+
+---
+
+## References
+
+- [Azure AI Agent Design Patterns](https://learn.microsoft.com/en-us/azure/architecture/ai-ml/guide/ai-agent-design-patterns)
+- [LangChain Documentation](https://python.langchain.com/)
+- [Ollama](https://ollama.com/)
+- [ChromaDB](https://docs.trychroma.com/)
+- [Groq](https://console.groq.com/)
